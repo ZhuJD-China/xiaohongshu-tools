@@ -1,0 +1,24 @@
+# --- credentials: NEVER commit ---
+cookies.json
+*.cookie
+*.cookies
+cookies.local.json
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+
+# --- local outputs ---
+out/
+*.log
+resp*.json
+.env

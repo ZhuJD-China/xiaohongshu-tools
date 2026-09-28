@@ -1,0 +1,4 @@
+# Signature engine is vendored at xhs/vendor/xhshow (MIT, see NOTICE.md).
+# No xhshow package dependency -- only its declared runtime deps:
+pycryptodome>=3.23.0
+requests>=2.31
