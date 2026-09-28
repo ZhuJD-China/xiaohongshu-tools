@@ -1,11 +1,9 @@
-"""Request signing, backed by the vendored ``xhshow`` source.
+"""Request signing via the built-in engine (``xhs.engine``).
 
-The xhshow code lives at ``xhs/vendor/xhshow`` and is imported from there,
-so this project has no dependency on the published ``xhshow`` package (see
-NOTICE.md). It reimplements ``x-s`` / ``x-s-common`` / ``x-rap-param``
-offline -- no browser, no CDP, no JS injection. This module only adapts its
-interface to ours and keeps every header consistent with the browser
-identity in ``config``.
+The engine computes ``x-s`` / ``x-s-common`` / ``x-rap-param`` entirely
+offline inside this package -- no browser, no CDP, no JS injection, no
+external signature service. This module adapts that interface to ours and
+keeps every header consistent with the browser identity in ``config``.
 """
 
 from __future__ import annotations
@@ -13,8 +11,8 @@ from __future__ import annotations
 import time
 import uuid
 
-from .vendor.xhshow import Xhshow
-from .vendor.xhshow.core.xrap import x_rap_param
+from .engine import Xhshow
+from .engine.core.xrap import x_rap_param
 
 _client: Xhshow | None = None
 
@@ -80,7 +78,7 @@ def sign(
             timestamp=ts,
         )
 
-    # xhshow emits x-rap-param only for POST; GET endpoints that need it
+    # The engine emits x-rap-param only for POST; GET endpoints that need it
     # (search) are signed here so both paths stay uniform.
     if x_rap and "x-rap-param" not in headers:
         body = payload if payload is not None else (params or {})

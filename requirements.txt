@@ -1,4 +1,4 @@
-# Signature engine is vendored at xhs/vendor/xhshow (MIT, see NOTICE.md).
-# No xhshow package dependency -- only its declared runtime deps:
+# 签名引擎内置于 xhs/engine，完全自主可控，无外部签名库依赖。
+# 仅需以下常规运行时依赖：
 pycryptodome>=3.23.0
 requests>=2.31

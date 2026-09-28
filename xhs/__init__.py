@@ -1,6 +1,7 @@
 """xiaohongshu-tools: signed, offline-computed access to the XHS web API.
 
-Signing is pure Python via ``xhshow`` -- no browser or CDP required. You
+Signing runs on the built-in engine (``xhs.engine``): pure Python, fully
+self-contained -- no browser, no CDP, no external signature package. You
 supply a session cookie; the library handles headers, retries, and error
 classification.
 

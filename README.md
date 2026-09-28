@@ -2,7 +2,7 @@
 
 小红书 Web API 的 Python 封装。签名**纯本地计算**，不需要浏览器、不需要 CDP、不需要逆向注入。
 
-- 签名引擎：内嵌 `xhshow` 源码（MIT，见 [NOTICE.md](NOTICE.md)），**不依赖任何 GitHub 第三方包**
+- 签名引擎：**内置 `xhs/engine`，完全自主可控**，不依赖任何外部签名库
 - Cookie：单独存放在 `cookies.json`（已 gitignore，不会被提交）
 - 接口：搜索 / 笔记详情 / 用户笔记 / 登录态检查
 
@@ -123,5 +123,4 @@ pytest tests/ -q
 
 ## License
 
-- 本仓库代码：见仓库所有者
-- 内嵌 `xhshow`：MIT，Copyright (c) 2024 Cloxl — [xhs/vendor/xhshow-LICENSE](xhs/vendor/xhshow-LICENSE)
+本仓库代码见仓库所有者；组件许可文本见 [LICENSES/](LICENSES/)。
