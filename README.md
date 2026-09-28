@@ -94,19 +94,24 @@ python -m xhs.cli cookies          # 只看状态，不打印 cookie 值
 
 全部 **11 个端点均已通过真实 cookie 实测**（`tests/` 里的 51 个用例是离线的，只覆盖构造与归一化，不联网）。
 
+**Host**：只有 `search_notes` 在 `so.xiaohongshu.com`，其余 10 个都在 `edith.xiaohongshu.com`。下表只列路径，把它们拼到对应 host 后面就是完整地址。
+**签名列**：`XYS` 是主站，`XYW` 是创作者侧，详见下一节。
+
 | 方法 | 接口 | 中文名 | 路径 | 签名 | 说明 |
 |---|---|---|---|---|---|
-| POST | `search_notes` | 搜笔记 | `so.xiaohongshu.com/api/sns/web/v2/search/notes` | XYS | 关键词搜笔记。返回标题、作者、点赞数，以及后续所有接口都要用的 `xsec_token` |
-| GET | `search_filter` | 搜索筛选项 | `edith.../api/sns/web/v1/search/filter` | XYS | 搜索结果页顶部的筛选项：排序依据、笔记类型、发布时间、搜索范围，带服务端分组 id，可回填给 `search_notes` |
-| GET | `search_recommend` | 搜索联想词 | `edith.../api/sns/web/v1/search/recommend` | XYS | 输入框的搜索联想词。返回 `code: 1000` 但 `success: true`，1000 是正常的「无精确匹配块」码，不是报错 |
-| POST | `search_topic` | 搜话题 | `edith.../web_api/sns/v1/search/topic` | XYW(creator) | 搜话题标签，返回话题名、链接、浏览量 |
-| POST | `search_user` | 搜用户 | `edith.../web_api/sns/v1/search/user_info` | XYW(creator) | 搜用户账号，返回昵称、小红书号、`user_id`、粉丝数，可直接接着调 `user_profile` |
-| POST | `note_feed` | 笔记详情 | `edith.../api/sns/web/v1/feed` | XYS | 单篇笔记详情：正文、标签、点赞/收藏/评论/分享数、IP 属地。找不到笔记时返回空 `items` 而非报错 |
-| GET | `user_me` | 当前账号 | `edith.../api/sns/web/v2/user/me` | XYS | 当前登录账号是谁。最省的一次登录态探测，`guest: true` 说明 cookie 已被拒 |
-| GET | `user_otherinfo` | 他人资料 | `edith.../api/sns/web/v1/user/otherinfo` | XYS | 他人主页资料与统计：笔记数、收藏数、获赞数、关注/粉丝/点赞三项互动 |
-| GET | `user_posted` | 用户笔记列表 | `edith.../api/sns/web/v1/user_posted` | XYS | 某个用户发布的笔记列表，`cursor` 翻页，回传的 `next_cursor` 原样喂下一页 |
-| GET | `comment_page` | 一级评论 | `edith.../api/sns/web/v2/comment/page` | XYS | 笔记的一级评论，含每条的 `sub_comment_count` 和首屏子回复 |
-| GET | `comment_sub_page` | 子评论回复 | `edith.../api/sns/web/v2/comment/sub/page` | XYS | 某条评论下的完整子回复列表，用 `root_comment_id` 定位、`sub_comment_cursor` 翻页 |
+| POST | `search_notes` | 搜笔记 | <code>/api/sns/web/<wbr>v2/search/<wbr>notes</code> | XYS | 关键词搜笔记。返回标题、作者、点赞数，以及后续所有接口都要用的 `xsec_token` |
+| GET | `search_filter` | 搜索筛选项 | <code>/api/sns/web/<wbr>v1/search/<wbr>filter</code> | XYS | 搜索结果页顶部的筛选项：排序依据、笔记类型、发布时间、搜索范围，带服务端分组 id，可回填给 `search_notes` |
+| GET | `search_recommend` | 搜索联想词 | <code>/api/sns/web/<wbr>v1/search/<wbr>recommend</code> | XYS | 输入框的搜索联想词。返回 `code: 1000` 但 `success: true`，1000 是正常的「无精确匹配块」码，不是报错 |
+| POST | `search_topic` | 搜话题 | <code>/web_api/sns/<wbr>v1/search/<wbr>topic</code> | XYW | 搜话题标签，返回话题名、链接、浏览量 |
+| POST | `search_user` | 搜用户 | <code>/web_api/sns/<wbr>v1/search/<wbr>user_info</code> | XYW | 搜用户账号，返回昵称、小红书号、`user_id`、粉丝数，可直接接着调 `user_profile` |
+| POST | `note_feed` | 笔记详情 | <code>/api/sns/web/<wbr>v1/feed</code> | XYS | 单篇笔记详情：正文、标签、点赞/收藏/评论/分享数、IP 属地。找不到笔记时返回空 `items` 而非报错 |
+| GET | `user_me` | 当前账号 | <code>/api/sns/web/<wbr>v2/user/<wbr>me</code> | XYS | 当前登录账号是谁。最省的一次登录态探测，`guest: true` 说明 cookie 已被拒 |
+| GET | `user_otherinfo` | 他人资料 | <code>/api/sns/web/<wbr>v1/user/<wbr>otherinfo</code> | XYS | 他人主页资料与统计：笔记数、收藏数、获赞数、关注/粉丝/点赞三项互动 |
+| GET | `user_posted` | 用户笔记列表 | <code>/api/sns/web/<wbr>v1/user_<wbr>posted</code> | XYS | 某个用户发布的笔记列表，`cursor` 翻页，回传的 `next_cursor` 原样喂下一页 |
+| GET | `comment_page` | 一级评论 | <code>/api/sns/web/<wbr>v2/comment/<wbr>page</code> | XYS | 笔记的一级评论，含每条的 `sub_comment_count` 和首屏子回复 |
+| GET | `comment_sub_page` | 子评论回复 | <code>/api/sns/web/<wbr>v2/comment/<wbr>sub/page</code> | XYS | 某条评论下的完整子回复列表，用 `root_comment_id` 定位、`sub_comment_cursor` 翻页 |
+
+> **11 个端点全部只读**：9 个 GET，外加 `search_notes` 和 `note_feed` 两个 POST，它们发 body 但只用来查询。全项目没有任何发评论、点赞、关注、收藏的写接口，原因见「安全说明」。
 
 配置表里**只有已验证的端点**：`VERIFIED` 中出现的键即代表实测通过，未通过的一律不收录。查一个不存在的名字会直接抛 `KeyError` 并列出已知键，而不是发出一个没人验证过的请求。
 
