@@ -92,23 +92,41 @@ python -m xhs.cli cookies          # 只看状态，不打印 cookie 值
 
 ## 接口状态
 
-| 名称 | 方法 | 路径 | 签名 |
-|---|---|---|---|
-| `search_notes` | POST | `so.xiaohongshu.com/api/sns/web/v2/search/notes` | XYS |
-| `search_filter` | GET | `edith.../api/sns/web/v1/search/filter` | XYS |
-| `search_recommend` | GET | `edith.../api/sns/web/v1/search/recommend` | XYS |
-| `search_topic` | POST | `edith.../web_api/sns/v1/search/topic` | XYW(creator) |
-| `search_user` | POST | `edith.../web_api/sns/v1/search/user_info` | XYW(creator) |
-| `note_feed` | POST | `edith.../api/sns/web/v1/feed` | XYS |
-| `user_me` | GET | `edith.../api/sns/web/v2/user/me` | XYS |
-| `user_otherinfo` | GET | `edith.../api/sns/web/v1/user/otherinfo` | XYS |
-| `user_posted` | GET | `edith.../api/sns/web/v1/user_posted` | XYS |
-| `comment_page` | GET | `edith.../api/sns/web/v2/comment/page` | XYS |
-| `comment_sub_page` | GET | `edith.../api/sns/web/v2/comment/sub/page` | XYS |
-
 全部 **11 个端点均已通过真实 cookie 实测**（`tests/` 里的 51 个用例是离线的，只覆盖构造与归一化，不联网）。
 
+| 方法 | 接口 | 路径 | 签名 | 说明 |
+|---|---|---|---|---|
+| POST | `search_notes` | `so.xiaohongshu.com/api/sns/web/v2/search/notes` | XYS | 关键词搜笔记。返回标题、作者、点赞数，以及后续所有接口都要用的 `xsec_token` |
+| GET | `search_filter` | `edith.../api/sns/web/v1/search/filter` | XYS | 搜索结果页顶部的筛选项：排序依据、笔记类型、发布时间、搜索范围，带服务端分组 id，可回填给 `search_notes` |
+| GET | `search_recommend` | `edith.../api/sns/web/v1/search/recommend` | XYS | 输入框的搜索联想词。返回 `code: 1000` 但 `success: true`，1000 是正常的「无精确匹配块」码，不是报错 |
+| POST | `search_topic` | `edith.../web_api/sns/v1/search/topic` | XYW(creator) | 搜话题标签，返回话题名、链接、浏览量 |
+| POST | `search_user` | `edith.../web_api/sns/v1/search/user_info` | XYW(creator) | 搜用户账号，返回昵称、小红书号、`user_id`、粉丝数，可直接接着调 `user_profile` |
+| POST | `note_feed` | `edith.../api/sns/web/v1/feed` | XYS | 单篇笔记详情：正文、标签、点赞/收藏/评论/分享数、IP 属地。找不到笔记时返回空 `items` 而非报错 |
+| GET | `user_me` | `edith.../api/sns/web/v2/user/me` | XYS | 当前登录账号是谁。最省的一次登录态探测，`guest: true` 说明 cookie 已被拒 |
+| GET | `user_otherinfo` | `edith.../api/sns/web/v1/user/otherinfo` | XYS | 他人主页资料与统计：笔记数、收藏数、获赞数、关注/粉丝/点赞三项互动 |
+| GET | `user_posted` | `edith.../api/sns/web/v1/user_posted` | XYS | 某个用户发布的笔记列表，`cursor` 翻页，回传的 `next_cursor` 原样喂下一页 |
+| GET | `comment_page` | `edith.../api/sns/web/v2/comment/page` | XYS | 笔记的一级评论，含每条的 `sub_comment_count` 和首屏子回复 |
+| GET | `comment_sub_page` | `edith.../api/sns/web/v2/comment/sub/page` | XYS | 某条评论下的完整子回复列表，用 `root_comment_id` 定位、`sub_comment_cursor` 翻页 |
+
 配置表里**只有已验证的端点**：`VERIFIED` 中出现的键即代表实测通过，未通过的一律不收录。查一个不存在的名字会直接抛 `KeyError` 并列出已知键，而不是发出一个没人验证过的请求。
+
+带 body 的两个 POST（`search_notes`、`note_feed`）还会额外发一个 `x-rap-param` 头，把请求体一并打包；漏发它**不报错**，只返回 `200` + `success: false` + 空 `payload`，所以排查"有 200 但没数据"时先看这个头。
+
+### 两种签名：XYS 和 XYW
+
+上面表格 `签名` 列写的 `XYS` / `XYW(creator)`，指的是请求头 `x-s` 的**信封前缀**，不是我们自己起的名字 —— 小红书前端发出来的 `x-s` 就长这样：
+
+```
+XYS_2UQ...（自定义字母表 Base64 的一段 JSON）   主站 /api/sns/web/*
+XYW_ey... （标准 Base64 的一段 JSON）            创作者 /web_api/*
+```
+
+两者外层编码**不一样**：`XYS_` 先标准 Base64 再按自定义字母表换字符（所以解出来第一个字符恒是 `2` 而不是标准表的 `e`），`XYW_` 就是普通 Base64。看第一个字符就能立刻判断这次发的是哪套信封。
+
+- **`XYS_`**：外层是 `{"x0":"4.3.5","x1":"xhs-pc-web","x2":"Windows","x3":"mns0301_...","x4":"object"}`，真正的签名在 `x3` 里 —— 一个 144 字节的结构体，依次塞了版本号、随机种子、毫秒时间戳、`uri+参数` 的 MD5、`a1`、`appId`、环境指纹位，最后整体 XOR 一段固定密钥再按第三套字母表 Base64 编码。
+- **`XYW_`**：结构不同，`{"signSvn":"56","signType":"x2","appId":"...","signVersion":"1","payload":"..."}`，`payload` 是 AES-128-CBC 加密的结果，用于创作者侧接口。
+
+两者**不能互换**：`/api/sns/web/*` 只认 `XYS_`，`/web_api/*` 只认 `XYW_`。发错的结果是被拒，而且是两种不同的拒法 —— 主站路径拿到 406，创作者路径用错 appId 会拿到 461/300011「当前账号存在异常」，后者会把整个会话打废，重试救不回来。封装层按端点路径自动选，调用方不用管。
 
 ## 实测踩到的坑
 
