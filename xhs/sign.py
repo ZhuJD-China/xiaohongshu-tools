@@ -8,9 +8,12 @@ keeps every header consistent with the browser identity in ``config``.
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
+from urllib.parse import quote, urlparse
 
+from .creator_signing import sign_creator
 from .engine import Xhshow
 from .engine.core.xrap import x_rap_param
 
@@ -23,6 +26,41 @@ def client() -> Xhshow:
     if _client is None:
         _client = Xhshow()
     return _client
+
+
+def query_url(url: str, params: dict | None) -> str:
+    """Append *params* to *url* using the engine's own encoding.
+
+    This must mirror how the signature is computed: the engine signs
+    ``quote(value, safe=",")``, leaving `,` literal, while
+    ``urlencode``/``quote_plus`` turns it into ``%2C``. Letting the HTTP
+    library re-encode the query silently invalidates the signature and the
+    server answers 406 -- the URL and the signed string have to agree
+    byte for byte.
+    """
+    if not params:
+        return url
+    parts = []
+    for key, value in params.items():
+        if isinstance(value, (list, tuple)):
+            raw = ",".join(str(v) for v in value)
+        elif value is None:
+            raw = ""
+        else:
+            raw = str(value)
+        parts.append(f"{key}={quote(raw, safe=',')}")
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}{'&'.join(parts)}"
+
+
+def json_body(payload: dict) -> str:
+    """Serialise a POST body exactly as the browser (and the signature) does.
+
+    Compact separators and unescaped Unicode: the signature is computed over
+    this exact string, and the web client sends raw UTF-8 rather than
+    ``\\uXXXX`` escapes.
+    """
+    return json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
 
 
 def new_search_id() -> str:
@@ -47,6 +85,7 @@ def sign(
     payload: dict | None = None,
     x_rap: bool = False,
     timestamp: float | None = None,
+    signer: str = "main",
 ) -> dict[str, str]:
     """Produce the signature headers for one request.
 
@@ -56,10 +95,33 @@ def sign(
 
     A single *timestamp* is threaded through every header: XHS rejects
     requests whose ``x-t`` and embedded signature timestamps disagree.
+
+    ``signer`` picks the scheme and must match the endpoint's path:
+
+    * ``"main"`` -- the ``XYS_`` envelope for ``/api/sns/web/*``.
+    * ``"creator"`` -- the ``XYW_`` envelope for ``/web_api/*``, which
+      additionally sets an ``appId`` of ``ugc`` and sends only ``x-s`` /
+      ``x-t``. These two are not interchangeable: the engine's XYW
+      variant uses a different appId and is rejected (HTTP 461) on
+      creator paths, so the creator scheme lives in
+      ``xhs.creator_signing`` rather than behind a format flag here.
     """
     ts = time.time() if timestamp is None else timestamp
-    c = client()
     method = method.upper()
+
+    if signer == "creator":
+        # Creator signing hashes only the path (+ JSON body for POST) and
+        # emits just x-s / x-t -- no x-s-common, no trace ids. The helper
+        # takes no timestamp argument (it stamps internally), so *ts is
+        # deliberately not threaded through here.
+        sg = sign_creator(
+            "url=" + urlparse(url).path,
+            payload if method == "POST" else None,
+            cookies.get("a1", ""),
+        )
+        return {k.lower(): str(v) for k, v in sg.items()}
+
+    c = client()
     rap_path = "//" + url.split("://", 1)[-1].split("?", 1)[0]
 
     if method == "POST":

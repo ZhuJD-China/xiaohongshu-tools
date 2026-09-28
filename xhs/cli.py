@@ -62,7 +62,6 @@ def build_parser() -> argparse.ArgumentParser:
         description="Signed access to the Xiaohongshu web API (offline-computed signatures).",
     )
     p.add_argument("--json", action="store_true", help="force JSON output")
-    p.add_argument("--no-unverified", action="store_true", help="refuse unverified endpoints (default)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     s = sub.add_parser("status", help="check whether cookies are still valid")

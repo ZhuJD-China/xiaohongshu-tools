@@ -12,9 +12,9 @@ from typing import Any
 
 import requests
 
-from .config import base_headers, get_endpoint
+from .config import CREATOR, WWW, base_headers, get_endpoint
 from .cookies import CookieError, load_cookies
-from .sign import sign
+from .sign import json_body, query_url, sign
 
 
 class XHSError(RuntimeError):
@@ -81,13 +81,11 @@ class XHSClient:
         *,
         timeout: float = 20.0,
         max_retries: int = 3,
-        allow_unverified: bool = False,
         session: requests.Session | None = None,
     ) -> None:
         self.cookies = cookies if cookies is not None else load_cookies()
         self.timeout = timeout
         self.max_retries = max_retries
-        self.allow_unverified = allow_unverified
         self.session = session or requests.Session()
         self.last_status: int | None = None
         self.last_code: Any = None
@@ -99,7 +97,6 @@ class XHSClient:
         *,
         params: dict | None = None,
         payload: dict | None = None,
-        allow_unverified: bool | None = None,
         referer: str | None = None,
     ) -> Any:
         """Call an endpoint by name and return its ``data`` field.
@@ -108,8 +105,7 @@ class XHSClient:
         returning ``None``: callers should not have to re-derive whether
         an empty result means "no data" or "blocked".
         """
-        gate = self.allow_unverified if allow_unverified is None else allow_unverified
-        ep = get_endpoint(endpoint, allow_unverified=gate)
+        ep = get_endpoint(endpoint)
 
         # A POST with no body still needs one for signing consistency.
         body = payload if payload is not None else ({} if ep.method == "POST" else None)
@@ -121,8 +117,22 @@ class XHSClient:
             params=params,
             payload=body,
             x_rap=ep.needs_rap,
+            signer=ep.signer,
         )
-        headers.update(base_headers(referer or (ep.host + "/")))
+        if ep.creator:
+            # Creator paths sign with an XYW_ envelope and send only x-s/x-t.
+            # They still arrive on the edith host, but declare the creator
+            # origin so the request looks like it came from the studio page.
+            headers.update(base_headers(referer or (CREATOR + "/")))
+            headers["origin"] = CREATOR
+            headers["referer"] = CREATOR + "/"
+        else:
+            headers.update(base_headers(referer or (ep.host + "/")))
+        if ep.method == "POST":
+            # Browser sends the charset explicitly; requests' json= helper
+            # would omit it and also escape non-ASCII, so the body is posted
+            # raw (see _send).
+            headers["content-type"] = "application/json;charset=UTF-8"
 
         attempt = 0
         while True:
@@ -166,18 +176,20 @@ class XHSClient:
             return parsed.get("data")
 
     def _send(self, method, url, headers, params, body):
+        # The query string must be built by our own encoder, not by
+        # requests: the signature covers ``quote(value, safe=",")`` and
+        # urlencode would escape the comma in ``image_formats``, which
+        # makes the server reject an otherwise valid signature with 406.
         if method == "POST":
             return self.session.post(
-                url,
-                params=params,
-                json=body,
+                query_url(url, params),
+                data=json_body(body).encode("utf-8"),
                 headers=headers,
                 cookies=self.cookies,
                 timeout=self.timeout,
             )
         return self.session.get(
-            url,
-            params=params,
+            query_url(url, params),
             headers=headers,
             cookies=self.cookies,
             timeout=self.timeout,
@@ -204,11 +216,9 @@ class XHSClient:
     # -- convenience ------------------------------------------------------
     def status(self) -> dict:
         """Cheap probe: does the API consider us authenticated?"""
-        from .config import EDITH
-
-        url = EDITH + "/api/sns/web/v1/user/me"
+        url = get_endpoint("user_me").url
         headers = sign(method="GET", url=url, cookies=self.cookies)
-        headers.update(base_headers())
+        headers.update(base_headers(WWW + "/"))
         resp = self.session.get(
             url, headers=headers, cookies=self.cookies, timeout=self.timeout
         )

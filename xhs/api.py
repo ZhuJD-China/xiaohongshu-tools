@@ -7,6 +7,7 @@ plain dicts/lists -- no framework types leak out.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from .client import XHSClient
@@ -79,7 +80,9 @@ class XHSApi:
             "ext_flags": [],
             "geo": "",
             "image_formats": ["jpg", "webp", "avif"],
-            "message_id": "",
+            # The web client sends the literal string "sending" here (a
+            # client-side state marker), not an empty string.
+            "message_id": "sending",
             "session_id": new_session_id(),
         }
 
@@ -115,6 +118,123 @@ class XHSApi:
             "xsec_token": item.get("xsec_token") or "",
             "note_card": card,
         }
+
+    def search_filter(self, keyword: str) -> dict[str, Any]:
+        """Return the filter chips the UI shows above search results.
+
+        These are the server's own grouping ids (sort/date/type), so they
+        feed back into ``search_notes`` rather than being decoded locally.
+        """
+        params = {"keyword": keyword, "search_id": new_search_id()}
+        data = self.client.request("search_filter", params=params) or {}
+        return {
+            "keyword": keyword,
+            "items": [
+                {
+                    "id": f.get("id"),
+                    "name": f.get("name") or "",
+                    "type": f.get("type") or "",
+                    "tags": [
+                        t.get("word") or t.get("name") or ""
+                        for t in (f.get("filter_tags") or [])
+                        if isinstance(t, dict)
+                    ],
+                    "raw": f,
+                }
+                for f in (data.get("filters") or [])
+            ],
+        }
+
+    def search_recommend(self, keyword: str) -> dict[str, Any]:
+        """Search autocomplete suggestions.
+
+        The server returns HTTP 200 with ``code=1000`` here -- a normal
+        "not an exact-match block" code, not an error. What matters is
+        ``success: true``, which is what the client keys off.
+        """
+        data = self.client.request(
+            "search_recommend", params={"keyword": keyword}
+        ) or {}
+        return {
+            "keyword": keyword,
+            "items": [
+                {
+                    "text": s.get("text") or "",
+                    "type": s.get("type") or "",
+                    "search_type": s.get("search_type") or "",
+                    "raw": s,
+                }
+                for s in (data.get("sug_items") or [])
+            ],
+            "search_cpl_id": data.get("search_cpl_id") or "",
+            "word_request_id": data.get("word_request_id") or "",
+        }
+
+    def search_topics(self, keyword: str, *, page: int = 1,
+                      page_size: int = 20) -> dict[str, Any]:
+        """Search hashtags (``/web_api/*``, creator signature).
+
+        The paging block is nested -- a flat ``{"page": 1, "page_size": 20}``
+        gets HTTP 400 because ``page`` must be an object here, unlike the
+        note search where both are top-level ints.
+        """
+        payload = {
+            "keyword": keyword,
+            "suggest_topic_request": {"title": "", "desc": ""},
+            "page": {"page_size": page_size, "page": page},
+        }
+        data = self.client.request("search_topic", payload=payload) or {}
+        return {
+            "keyword": keyword,
+            "page": page,
+            "items": [
+                {
+                    "id": t.get("id") or "",
+                    "name": t.get("name") or "",
+                    "link": t.get("link") or "",
+                    "view_count": t.get("view_num"),
+                    "type": t.get("type") or "",
+                    "smart": bool(t.get("smart")),
+                    "raw": t,
+                }
+                for t in (data.get("topic_info_dtos") or [])
+                if isinstance(t, dict)
+            ],
+        }
+
+    def search_users(self, keyword: str, *, page: int = 1,
+                     page_size: int = 20) -> dict[str, Any]:
+        """Search user accounts (``/web_api/*``, creator signature).
+
+        ``search_id`` here is a millisecond timestamp string -- the note
+        search uses an 18-char random id instead. They are not
+        interchangeable across the two endpoints.
+        """
+        payload = {
+            "keyword": keyword,
+            "search_id": str(int(time.time() * 1000)),
+            "page": {"page_size": page_size, "page": page},
+        }
+        data = self.client.request("search_user", payload=payload) or {}
+        users = []
+        for u in (data.get("user_info_dtos") or []):
+            if not isinstance(u, dict):
+                continue
+            base = u.get("user_base_dto") or {}
+            users.append(
+                {
+                    "user_id": base.get("user_id") or "",
+                    "red_id": base.get("red_id") or "",
+                    "nickname": base.get("user_nickname") or "",
+                    "desc": base.get("desc") or "",
+                    "avatar": base.get("image") or base.get("image_size_large") or "",
+                    "fans_total": u.get("fans_total"),
+                    "discovery_total": u.get("discovery_total"),
+                    "fstatus": u.get("fstatus") or "",
+                    "raw": u,
+                }
+            )
+        return {"keyword": keyword, "page": page, "items": users}
 
     # ---- note -----------------------------------------------------------
     def get_note(self, note_id: str, *, xsec_token: str = "") -> dict[str, Any]:
@@ -211,6 +331,178 @@ class XHSApi:
                 }
                 for n in notes
             ],
+        }
+
+    def me(self) -> dict[str, Any]:
+        """The account the loaded cookie belongs to.
+
+        Cheapest available auth check that also tells you *who* you are:
+        ``guest: true`` means the cookie was rejected upstream of any
+        endpoint, so every other call would fail anyway.
+        """
+        data = self.client.request("user_me") or {}
+        return {
+            "guest": bool(data.get("guest")),
+            "user_id": data.get("user_id") or "",
+            "nickname": data.get("nickname") or "",
+            "red_id": data.get("red_id") or "",
+            "desc": data.get("desc") or "",
+            "avatar": data.get("imageb") or data.get("images") or "",
+            "gender": data.get("gender"),
+            "xsec_token": data.get("xsec_token") or "",
+            "raw": data,
+        }
+
+    def user_profile(self, user_id: str) -> dict[str, Any]:
+        """Another account's profile and headline statistics.
+
+        The nested ``basic_info`` block holds identity; the counters are
+        top-level. ``user_id`` is the opaque one from a search result --
+        ``red_id`` is the human-readable handle and is not accepted here.
+        """
+        data = self.client.request(
+            "user_otherinfo", params={"target_user_id": user_id}
+        ) or {}
+        basic = data.get("basic_info") or {}
+        return {
+            "user_id": user_id,
+            "nickname": basic.get("nickname") or "",
+            "red_id": basic.get("red_id") or "",
+            "desc": basic.get("desc") or "",
+            "avatar": basic.get("imageb") or basic.get("images") or "",
+            "ip_location": basic.get("ip_location") or "",
+            "posted": data.get("posted"),
+            "collected": data.get("collected"),
+            "liked": data.get("liked"),
+            "interactions": [
+                {
+                    "name": i.get("name") or "",
+                    "type": i.get("type") or "",
+                    "count": i.get("count"),
+                }
+                for i in (data.get("interactions") or [])
+                if isinstance(i, dict)
+            ],
+            "tags": [t.get("name") for t in (data.get("tags") or []) if isinstance(t, dict)],
+            "raw": data,
+        }
+
+    # ---- comment --------------------------------------------------------
+    def comments(
+        self,
+        note_id: str,
+        *,
+        xsec_token: str,
+        cursor: str = "",
+        top_comment_id: str = "",
+    ) -> dict[str, Any]:
+        """First-level comments for a note.
+
+        ``xsec_token`` is mandatory: without it the server replies
+        461/300031 ("note temporarily unavailable"), which reads like the
+        note is gone rather than like a missing parameter. It comes from a
+        search hit, a note URL, or ``me()['xsec_token']``.
+
+        Set ``top_comment_id`` to fetch a specific comment's page; for the
+        replies *under* one comment use :meth:`sub_comments`.
+        """
+        if not xsec_token:
+            raise ValueError(
+                "xsec_token is required for comments -- the server returns "
+                "461/300031 without it (pass the token from a search result "
+                "or note URL)"
+            )
+        params = {
+            "note_id": note_id,
+            "cursor": cursor,
+            "top_comment_id": top_comment_id,
+            "image_formats": "jpg,webp,avif",
+            "xsec_token": xsec_token,
+        }
+        data = self.client.request("comment_page", params=params) or {}
+        return self._comment_page(note_id, data)
+
+    def sub_comments(
+        self,
+        note_id: str,
+        root_comment_id: str,
+        *,
+        xsec_token: str,
+        cursor: str = "",
+        num: int = 30,
+    ) -> dict[str, Any]:
+        """Replies nested under one parent comment.
+
+        Same two mandatory extras as :meth:`comments`. The parent id is the
+        ``id`` of a comment from that note, and its
+        ``sub_comment_cursor`` (rather than ``""``) continues past the
+        first page of replies.
+        """
+        if not xsec_token:
+            raise ValueError(
+                "xsec_token is required for sub-comments -- the server "
+                "returns 461/300031 without it"
+            )
+        params = {
+            "note_id": note_id,
+            "root_comment_id": root_comment_id,
+            "num": num,
+            "cursor": cursor,
+            "image_formats": "jpg,webp,avif",
+            "xsec_token": xsec_token,
+        }
+        data = self.client.request("comment_sub_page", params=params) or {}
+        return self._comment_page(note_id, data)
+
+    def _comment_page(self, note_id: str, data: dict) -> dict[str, Any]:
+        """Shared shape for comment/page and comment/sub/page."""
+        items = [
+            self._normalise_comment(c)
+            for c in (data.get("comments") or [])
+            if isinstance(c, dict)
+        ]
+        return {
+            "note_id": note_id,
+            "items": items,
+            "next_cursor": data.get("cursor") or "",
+            "has_more": bool(data.get("has_more")),
+            "xsec_token": data.get("xsec_token") or "",
+        }
+
+    @staticmethod
+    def _normalise_comment(c: dict) -> dict:
+        """Flatten one comment.
+
+        Counters arrive as strings (``"87"``, ``"4"``), not ints. Reply
+        children are inline under ``sub_comments`` on comment/page and the
+        target sits under ``target_comment`` on sub/page, so both are
+        normalised to the same keys.
+        """
+        user = c.get("user_info") or {}
+        subs = c.get("sub_comments")
+        target = c.get("target_comment")
+        return {
+            "id": c.get("id") or "",
+            "content": c.get("content") or "",
+            "time": c.get("create_time"),
+            "like_count": c.get("like_count"),
+            "liked": bool(c.get("liked")),
+            "ip_location": c.get("ip_location") or "",
+            "author": user.get("nickname") or "",
+            "author_id": user.get("user_id") or "",
+            "avatar": user.get("image") or "",
+            "sub_comment_count": c.get("sub_comment_count"),
+            "sub_comment_cursor": c.get("sub_comment_cursor") or "",
+            "sub_comment_has_more": bool(c.get("sub_comment_has_more")),
+            "sub_comments": (
+                [XHSApi._normalise_comment(s) for s in subs]
+                if isinstance(subs, list) else []
+            ),
+            "target_comment": (
+                XHSApi._normalise_comment(target)
+                if isinstance(target, dict) else None
+            ),
+            "raw": c,
         }
 
     # ---- status ---------------------------------------------------------

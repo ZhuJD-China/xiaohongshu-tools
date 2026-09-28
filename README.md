@@ -4,7 +4,7 @@
 
 - 签名引擎：**内置 `xhs/engine`，完全自主可控**，不依赖任何外部签名库
 - Cookie：单独存放在 `cookies.json`（已 gitignore，不会被提交）
-- 接口：搜索 / 笔记详情 / 用户笔记 / 登录态检查
+- 接口：搜索 / 笔记详情 / 用户 / 评论（含子评论）/ 登录态，**全部实测通过**
 
 ## 安装
 
@@ -56,6 +56,28 @@ print(note["note"]["title"], note["note"]["comment_count"], note["note"]["tags"]
 # 用户笔记（cursor 翻页）
 posts = api.user_notes("5ff000000000000000000000", cursor="")
 print(posts["next_cursor"], len(posts["items"]))
+
+# 用户资料与账号
+profile = api.user_profile(posts["user_id"])
+print(profile["nickname"], profile["red_id"], profile["posted"])
+print(api.me()["nickname"])
+
+# 评论 —— xsec_token 必填，缺了服务端回 461/300031
+first_note = r["items"][0]
+c = api.comments(first_note["id"], xsec_token=first_note["xsec_token"])
+for it in c["items"]:
+    print(it["author"], it["content"], it["sub_comment_count"])
+    if int(it["sub_comment_count"] or 0) > 0:
+        subs = api.sub_comments(first_note["id"], it["id"],
+                                xsec_token=first_note["xsec_token"],
+                                cursor=it["sub_comment_cursor"])
+        print("  ", [s["content"] for s in subs["items"]])
+
+# 其余搜索
+print([f["name"] for f in api.search_filter("opencode")["items"]])
+print([s["text"] for s in api.search_recommend("opencode")["items"]])
+print([t["name"] for t in api.search_topics("摄影")["items"]][:5])
+print([u["nickname"] for u in api.search_users("摄影")["items"]][:5])
 ```
 
 ### CLI
@@ -70,16 +92,23 @@ python -m xhs.cli cookies          # 只看状态，不打印 cookie 值
 
 ## 接口状态
 
-| 名称 | 方法 | 路径 | 状态 |
+| 名称 | 方法 | 路径 | 签名 |
 |---|---|---|---|
-| `search_notes` | POST | `so.xiaohongshu.com/api/sns/web/v2/search/notes` | ✅ 已实测 |
-| `note_feed` | POST | `edith.xiaohongshu.com/api/sns/web/v1/feed` | ✅ 已实测 |
-| `user_posted` | GET | `edith.xiaohongshu.com/api/sns/web/v1/user_posted` | ✅ 已实测 |
-| `comment_page` | GET | `.../v2/comment/page` | ⚠️ 未验证 |
-| `search_user` / `search_topic` | POST | `so.../v1/search/...` | ⚠️ 未验证 |
-| `home_feed` | POST | `.../v1/homefeed` | ⚠️ 未验证 |
+| `search_notes` | POST | `so.xiaohongshu.com/api/sns/web/v2/search/notes` | XYS |
+| `search_filter` | GET | `edith.../api/sns/web/v1/search/filter` | XYS |
+| `search_recommend` | GET | `edith.../api/sns/web/v1/search/recommend` | XYS |
+| `search_topic` | POST | `edith.../web_api/sns/v1/search/topic` | XYW(creator) |
+| `search_user` | POST | `edith.../web_api/sns/v1/search/user_info` | XYW(creator) |
+| `note_feed` | POST | `edith.../api/sns/web/v1/feed` | XYS |
+| `user_me` | GET | `edith.../api/sns/web/v2/user/me` | XYS |
+| `user_otherinfo` | GET | `edith.../api/sns/web/v1/user/otherinfo` | XYS |
+| `user_posted` | GET | `edith.../api/sns/web/v1/user_posted` | XYS |
+| `comment_page` | GET | `edith.../api/sns/web/v2/comment/page` | XYS |
+| `comment_sub_page` | GET | `edith.../api/sns/web/v2/comment/sub/page` | XYS |
 
-未验证的接口**默认拒绝调用**，需显式 `XHSClient(allow_unverified=True)`。这样可以避免「路径写错了但看起来像能用」。
+全部 **11 个端点均已通过真实 cookie 实测**（`tests/` 里的 51 个用例是离线的，只覆盖构造与归一化，不联网）。
+
+配置表里**只有已验证的端点**：`VERIFIED` 中出现的键即代表实测通过，未通过的一律不收录。查一个不存在的名字会直接抛 `KeyError` 并列出已知键，而不是发出一个没人验证过的请求。
 
 ## 实测踩到的坑
 
@@ -105,6 +134,36 @@ python -m xhs.cli cookies          # 只看状态，不打印 cookie 值
 6. **`x-s` 每次都不一样**
    签名内含随机填充序列，这是正常的（不是 bug）。固定 `timestamp` 时 `x-t` 和签名前缀稳定，尾部随机。
 
+7. **GET 的 query 必须自己编码 —— 否则 406**（最坑的一个）
+   签名按 `quote(value, safe=",")` 计算，逗号**原样保留**；交给 `requests` 用 `urlencode` 编码会把
+   `image_formats=jpg,webp,avif` 变成 `jpg%2Cwebp%2Cavif`，签名与实际 URL 对不上，服务端一律回
+   **406**（body 恒为 `{"code":-1}`）。
+   `comment_page` 和 `user_posted` 都栽在这里 —— 封装层现在用 `sign.query_url()` 构造 URL，
+   与签名逐字节一致。
+
+8. **评论接口缺 `xsec_token` 回 461/300031**
+   报错文案是「当前笔记暂时无法浏览」，看着像笔记没了，其实是参数缺失。`comments()` / `sub_comments()`
+   把 `xsec_token` 设成必填，缺了直接抛 `ValueError` 而不是发请求。
+   `image_formats` 也要一起带。
+
+9. **子评论的参数名是 `root_comment_id`，不是 `top_comment_id`**
+   用错会得到 **-9109 参数错误**。翻页用父评论的 `sub_comment_cursor`（不是 data 顶层的 `cursor`）。
+
+10. **`/web_api/*` 搜索的分页是嵌套对象**
+    `page` 必须是 `{"page_size": 20, "page": 1}`；拍平成 `{"page": 1, "page_size": 20}` 会
+    **400**（`page: required struct with json string format`）。`search_topic` 还要
+    `suggest_topic_request`，`search_user` 的 `search_id` 是毫秒时间戳字符串 —— 和笔记搜索的
+    18 位随机 `search_id` 不是一回事，不能互换。
+
+11. **POST body 要紧凑 JSON、不转义中文**
+    浏览器发的是 `{"keyword":"美食",...}`，`requests` 的 `json=` 会加空格并把中文转成 `\uXXXX`，
+    与签名所覆盖的字符串不一致。封装层用 `sign.json_body()` 手动序列化。
+
+12. **两套签名不能互换**
+    `/api/sns/web/*` 用 `XYS_`；`/web_api/*` 用 `XYW_`（`appId=ugc`）。
+    把引擎的 XYW（`appId=xhs-pc-web`）发给评论接口会触发 **461/300011「当前账号存在异常」**，
+    直接把会话打废 —— 这不是重试能恢复的。
+
 ## 测试
 
 ```bash
@@ -112,7 +171,7 @@ python -m xhs.cli cookies          # 只看状态，不打印 cookie 值
 pytest tests/ -q
 ```
 
-34 个用例覆盖：端点配置、签名头完整性、`page_size`/`sort` 参数守卫、响应结构归一化、cookie 读写与「不泄露凭据」断言。
+51 个用例覆盖：端点配置与签名方案匹配、query/body 编码（406 回归）、签名头完整性、`page_size`/`sort`/`xsec_token` 参数守卫、各响应结构归一化、cookie 读写与「不泄露凭据」断言。
 
 ## 安全说明
 
